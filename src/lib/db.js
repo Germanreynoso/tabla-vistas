@@ -1,4 +1,6 @@
 const STORAGE_KEY = 'easy_db_manager_data';
+const SETTINGS_KEY = 'easy_db_manager_settings';
+
 
 export const getDB = () => {
   const data = localStorage.getItem(STORAGE_KEY);
@@ -8,6 +10,16 @@ export const getDB = () => {
 export const saveDB = (db) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 };
+
+export const getSettings = () => {
+  const data = localStorage.getItem(SETTINGS_KEY);
+  return data ? JSON.parse(data) : { groqKey: '' };
+};
+
+export const saveSettings = (settings) => {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+};
+
 
 export const createTable = (name) => {
   const db = getDB();

@@ -1,5 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { getDB, createTable, deleteTable, addRecord, updateRecord, deleteRecord, addField, saveDB } from './lib/db';
+import React, { useState, useEffect, useRef } from 'react';
+import { toPng } from 'html-to-image';
+
+import { getDB, createTable, deleteTable, addRecord, updateRecord, deleteRecord, addField, saveDB, getSettings, saveSettings } from './lib/db';
+
 import { 
   Plus, 
   Settings, 
@@ -12,8 +15,18 @@ import {
   Database,
   X,
   Check,
-  Filter
+  Filter,
+  Sparkles,
+  Loader2,
+  Image as ImageIcon,
+  Share2,
+  Layers,
+  Layout
 } from 'lucide-react';
+
+
+import { askAI } from './lib/groq';
+
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -39,10 +52,20 @@ export default function App() {
   const [isCreatingTable, setIsCreatingTable] = useState(false);
   const [newTableName, setNewTableName] = useState('');
   const [editingRecord, setEditingRecord] = useState(null);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState({ groqKey: '' });
+  const tableRef = useRef(null);
+
+
+
 
   useEffect(() => {
     setDb(getDB());
+    setSettings(getSettings());
   }, []);
+
 
   const refreshDB = () => setDb(getDB());
 
@@ -64,6 +87,72 @@ export default function App() {
       refreshDB();
     }
   };
+
+  const handleAiCommand = async (e) => {
+    e.preventDefault();
+    if (!aiPrompt.trim() || isAiLoading) return;
+
+    setIsAiLoading(true);
+    try {
+      const result = await askAI(aiPrompt, db);
+      
+      if (result.action === 'CREATE_DATABASE') {
+        const createdTables = [];
+        // First pass: create all tables
+        result.tables.forEach(tData => {
+          const table = createTable(tData.name);
+          createdTables.push({ ...table, rawFields: tData.fields });
+        });
+
+        // Second pass: add fields (handling relations)
+        const dbSnapshot = getDB();
+        createdTables.forEach(tempTable => {
+          tempTable.rawFields.forEach(fData => {
+            const field = { ...fData };
+            if (fData.type === 'relation') {
+              const target = dbSnapshot.tables.find(t => t.name.toLowerCase() === fData.relationTable.toLowerCase());
+              if (target) field.relationTableId = target.id;
+            }
+            addField(tempTable.id, field);
+          });
+        });
+        
+        refreshDB();
+        setView('schema');
+        setAiPrompt(`Base de datos creada con ${result.tables.length} tablas.`);
+
+      } else if (result.action === 'CREATE_TABLE') {
+
+        const table = createTable(result.name);
+        result.fields.forEach(f => addField(table.id, f));
+        setSelectedTableId(table.id);
+        setView('data');
+        refreshDB(); 
+        setAiPrompt(`Tabla "${result.name}" creada.`);
+      } else if (result.action === 'ADD_RECORDS') {
+        const targetTable = result.tableId || selectedTableId;
+        if (!targetTable) throw new Error('Selecciona una tabla primero o especifica el nombre en tu pedido.');
+        result.records.forEach(r => addRecord(targetTable, r));
+        refreshDB();
+        setAiPrompt(`${result.records.length} registros añadidos.`);
+      } else if (result.action === 'FILTER') {
+        setSearchTerm(result.logic); 
+        setAiPrompt(`Filtrado por: ${result.logic}`);
+      } else if (result.action === 'MESSAGE') {
+        alert(result.text);
+      }
+      
+      if (result.action !== 'MESSAGE') {
+        setTimeout(() => setAiPrompt(''), 3000);
+      }
+    } catch (error) {
+
+      alert(error.message || 'Error al procesar comando');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
 
   const selectedTable = db.tables.find(t => t.id === selectedTableId);
   const tableData = selectedTable ? db.data[selectedTableId] || [] : [];
@@ -96,18 +185,51 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const handleExportImage = async () => {
+    if (!tableRef.current) return;
+    try {
+      const dataUrl = await toPng(tableRef.current, { backgroundColor: '#f8fafc', cacheBust: true });
+      const link = document.createElement('a');
+      link.download = `${selectedTable.name}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      alert('Error al generar la imagen');
+    }
+  };
+
+
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans text-slate-800">
+    <div className="flex h-screen bg-[#f8fafc] overflow-hidden font-sans text-slate-800">
       {/* Sidebar */}
-      <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shadow-sm">
-        <div className="p-6 border-b border-slate-100 flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg text-white">
-            <Database size={24} />
+      <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shadow-sm z-20">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-blue-600 p-2 rounded-lg text-white shadow-lg shadow-blue-200">
+              <Database size={24} />
+            </div>
+            <h1 className="font-bold text-xl tracking-tight text-slate-900">EasyDB</h1>
           </div>
-          <h1 className="font-bold text-xl tracking-tight text-slate-900">EasyDB</h1>
         </div>
 
+        <div className="px-4 pb-2">
+          <button
+            onClick={() => { setSelectedTableId(null); setView('schema'); }}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all font-bold text-sm",
+              view === 'schema' && !selectedTableId 
+                ? "bg-blue-600 text-white shadow-lg shadow-blue-200" 
+                : "text-slate-600 hover:bg-slate-100 hover:text-blue-600"
+            )}
+          >
+            <Layout size={20} />
+             Esquema de la DB
+          </button>
+        </div>
+
+
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
+
           <div className="flex items-center justify-between px-2 mb-4">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tus Tablas</span>
             <button 
@@ -163,17 +285,54 @@ export default function App() {
           ))}
         </div>
 
-        <div className="p-4 border-t border-slate-100 text-center">
-          <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest">Almacenamiento Local</p>
+        <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition-all text-xs font-bold uppercase tracking-wider"
+          >
+            <Settings size={16} />
+            Configuración IA
+          </button>
+          <div className="text-center">
+             <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest">Almacenamiento Local</p>
+          </div>
         </div>
       </aside>
 
+
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
+        {/* Global AI Command Bar */}
+        <div className="px-6 py-4 bg-white border-b border-slate-200 flex items-center gap-4 shadow-sm z-10">
+          <div className="flex-1 relative">
+            <form onSubmit={handleAiCommand}>
+              <Sparkles className={cn(
+                "absolute left-4 top-1/2 -translate-y-1/2 transition-colors",
+                isAiLoading ? "text-purple-400" : "text-purple-600"
+              )} size={20} />
+              <input
+                type="text"
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="IA: 'Crea una tabla...', 'Genera datos...', 'Analiza...'"
+                className="w-full pl-12 pr-12 py-3 bg-purple-50/30 border border-purple-100 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all placeholder:text-purple-300"
+                disabled={isAiLoading}
+              />
+              {isAiLoading && (
+                <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                  <Loader2 size={18} className="animate-spin text-purple-600" />
+                </div>
+              )}
+            </form>
+          </div>
+        </div>
+
         {selectedTable ? (
+
           <>
             {/* Header */}
-            <header className="bg-white border-b border-slate-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 sticky top-0 z-20">
+
               <div>
                 <div className="flex items-center gap-3 mb-1">
                   <h2 className="text-2xl font-bold text-slate-900">{selectedTable.name}</h2>
@@ -200,8 +359,18 @@ export default function App() {
                   >
                     Estructura
                   </button>
+                  <button 
+                    onClick={() => setView('schema')}
+                    className={cn(
+                      "text-sm font-medium transition",
+                      view === 'schema' ? "text-blue-600 border-b-2 border-blue-600 pb-1" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    Esquema (Visual)
+                  </button>
                 </div>
               </div>
+
 
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -222,6 +391,14 @@ export default function App() {
                   <Download size={20} />
                 </button>
                 <button 
+                  onClick={handleExportImage}
+                  className="p-2 border border-slate-200 rounded-xl hover:bg-slate-50 transition text-slate-600"
+                  title="Exportar Imagen"
+                >
+                  <ImageIcon size={20} />
+                </button>
+
+                <button 
                   onClick={() => handleDeleteTable(selectedTableId)}
                   className="p-2 border border-slate-200 rounded-xl hover:bg-red-50 hover:text-red-600 transition text-slate-600"
                   title="Eliminar Tabla"
@@ -238,9 +415,12 @@ export default function App() {
               </div>
             </header>
 
+
+
             {/* View Content */}
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex-1 overflow-auto p-6" ref={tableRef}>
               {view === 'data' ? (
+
                 <DataGrid 
                   table={selectedTable} 
                   data={filteredData} 
@@ -253,17 +433,25 @@ export default function App() {
                   }}
                   db={db}
                 />
-              ) : (
+              ) : view === 'settings' ? (
                 <TableSettings 
                   table={selectedTable} 
                   onRefresh={refreshDB}
                   db={db}
                 />
+              ) : (
+                <div className="max-w-xl">
+                    <TableSchemaCard table={selectedTable} db={db} onSelectTable={(id) => setSelectedTableId(id)} />
+                </div>
               )}
             </div>
+
           </>
+        ) : view === 'schema' ? (
+          <SchemaView db={db} onSelectTable={(id) => { setSelectedTableId(id); setView('data'); }} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center text-slate-400">
+
             <div className="bg-slate-100 p-8 rounded-full mb-6">
               <Database size={64} className="text-slate-300" />
             </div>
@@ -381,11 +569,159 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
+          <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden border border-slate-100 animate-in zoom-in-95 duration-200">
+            <div className="p-8">
+              <div className="w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center text-purple-600 mb-6">
+                <Settings size={32} />
+              </div>
+              <h3 className="text-2xl font-bold text-slate-900 mb-2">Configuración IA</h3>
+              <p className="text-slate-500 text-sm mb-8 leading-relaxed">
+                Tu API Key de Groq se guarda localmente en tu navegador y nunca se envía a nuestros servidores.
+              </p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2 ml-1">
+                    Groq API Key
+                  </label>
+                  <input
+                    type="password"
+                    value={settings.groqKey}
+                    onChange={(e) => setSettings({ ...settings, groqKey: e.target.value })}
+                    placeholder="gsk_..."
+                    className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all font-mono text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-10 flex flex-col gap-3">
+                <button 
+                  onClick={() => {
+                    saveSettings(settings);
+                    setShowSettings(false);
+                  }}
+                  className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold hover:bg-slate-800 transition shadow-xl shadow-slate-200 active:scale-95"
+                >
+                  Guardar Cambios
+                </button>
+                <button 
+                  onClick={() => setShowSettings(false)}
+                  className="w-full py-4 text-slate-400 font-bold hover:text-slate-600 transition text-sm"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+
+  );
+}
+
+function TableSchemaCard({ table, db, onSelectTable }) {
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden flex flex-col animate-in zoom-in-95">
+      <div className="p-4 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <TableIcon size={16} className="text-blue-400" />
+          <span className="font-bold">{table.name}</span>
+        </div>
+      </div>
+      <div className="p-2 divide-y divide-slate-50">
+        {table.fields.map(field => (
+          <div key={field.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-slate-700">{field.name}</span>
+                {field.system && <span className="text-[9px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-black uppercase">PK</span>}
+              </div>
+              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-tighter">{field.type}</span>
+            </div>
+            {field.type === 'relation' && (
+              <button 
+                onClick={() => onSelectTable(field.relationTableId)}
+                className="flex items-center gap-2 text-[11px] bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-xl font-bold hover:bg-indigo-100 transition"
+              >
+                <Share2 size={12} />
+                {db.tables.find(t => t.id === field.relationTableId)?.name || 'FK'}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SchemaView({ db, onSelectTable }) {
+
+  return (
+    <div className="flex-1 overflow-auto p-8 bg-slate-50/50">
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold text-slate-900">Esquema de Base de Datos</h2>
+        <p className="text-slate-500">Visualiza las tablas y sus relaciones (Estilo Supabase)</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        {db.tables.map(table => (
+          <div 
+            key={table.id} 
+            className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col group"
+          >
+            <div className="p-4 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TableIcon size={16} className="text-blue-400" />
+                <span className="font-bold">{table.name}</span>
+              </div>
+              <button 
+                onClick={() => onSelectTable(table.id)}
+                className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded-md transition"
+              >
+                Abrir Tabla
+              </button>
+            </div>
+            <div className="p-2 divide-y divide-slate-50 flex-1">
+              {table.fields.map(field => (
+                <div key={field.id} className="p-3 flex items-center justify-between group-hover:bg-slate-50/50 transition">
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-700">{field.name}</span>
+                      {field.system && <span className="text-[9px] bg-slate-100 text-slate-400 px-1 rounded font-black uppercase">PK</span>}
+                    </div>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-tighter">{field.type}</span>
+                  </div>
+                  {field.type === 'relation' && (
+                    <div className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded-full font-bold">
+                      <Share2 size={10} />
+                      {db.tables.find(t => t.id === field.relationTableId)?.name || 'FK'}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {db.tables.length === 0 && (
+          <div className="col-span-full py-20 text-center bg-white rounded-3xl border-2 border-dashed border-slate-200">
+            <Layers size={48} className="mx-auto text-slate-200 mb-4" />
+            <p className="text-slate-400">Pídele a Groq que cree tu base de datos para ver el esquema aquí.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function DataGrid({ table, data, onEditRecord, onDeleteRecord, db }) {
+
   if (data.length === 0) {
     return (
       <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400">

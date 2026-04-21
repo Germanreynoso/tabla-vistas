@@ -21,8 +21,13 @@ import {
   Image as ImageIcon,
   Share2,
   Layers,
-  Layout
+  Layout,
+  MessageSquare,
+  Send,
+  User as UserIcon,
+  Bot as BotIcon
 } from 'lucide-react';
+
 
 
 import { askAI } from './lib/groq';
@@ -56,7 +61,11 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState({ groqKey: '' });
+  const [chatMessages, setChatMessages] = useState([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const tableRef = useRef(null);
+  const chatEndRef = useRef(null);
+
 
 
 
@@ -65,6 +74,13 @@ export default function App() {
     setDb(getDB());
     setSettings(getSettings());
   }, []);
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, isChatOpen]);
+
 
 
   const refreshDB = () => setDb(getDB());
@@ -153,8 +169,64 @@ export default function App() {
     }
   };
 
+  const handleChatMessage = async (text) => {
+    if (!text.trim()) return;
+    const newMessages = [...chatMessages, { role: 'user', text }];
+    setChatMessages(newMessages);
+    setIsAiLoading(true);
+
+    try {
+      const result = await askAI(text, db);
+      const botResponse = result.action === 'MESSAGE' 
+        ? result.text 
+        : `He realizado la siguiente acción: ${result.action}. ¿Hay algo más en lo que pueda ayudarte?`;
+      
+      setChatMessages([...newMessages, { role: 'bot', text: botResponse }]);
+      
+      // Execute action if it came from chat too
+      if (result.action !== 'MESSAGE') {
+          if (result.action === 'CREATE_DATABASE') {
+              const createdTables = [];
+              result.tables.forEach(tData => {
+                  const table = createTable(tData.name);
+                  createdTables.push({ ...table, rawFields: tData.fields });
+              });
+              const dbSnapshot = getDB();
+              createdTables.forEach(tempTable => {
+                  tempTable.rawFields.forEach(fData => {
+                      const field = { ...fData };
+                      if (fData.type === 'relation') {
+                          const target = dbSnapshot.tables.find(t => t.name.toLowerCase() === fData.relationTable.toLowerCase());
+                          if (target) field.relationTableId = target.id;
+                      }
+                      addField(tempTable.id, field);
+                  });
+              });
+              refreshDB();
+              setView('schema');
+          } else if (result.action === 'CREATE_TABLE') {
+              const table = createTable(result.name);
+              result.fields.forEach(f => addField(table.id, f));
+              setSelectedTableId(table.id);
+              setView('data');
+              refreshDB();
+          } else if (result.action === 'ADD_RECORDS') {
+              const targetTable = result.tableId || selectedTableId;
+              if (targetTable) {
+                  result.records.forEach(r => addRecord(targetTable, r));
+                  refreshDB();
+              }
+          }
+      }
+    } catch (err) {
+      setChatMessages([...newMessages, { role: 'bot', text: 'Lo siento, hubo un error al procesar tu mensaje. Revisa tu API Key.' }]);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
 
   const selectedTable = db.tables.find(t => t.id === selectedTableId);
+
   const tableData = selectedTable ? db.data[selectedTableId] || [] : [];
 
   const filteredData = tableData.filter(row => {
@@ -619,7 +691,97 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Floating Chat Button */}
+      <button 
+        onClick={() => setIsChatOpen(!isChatOpen)}
+        className="fixed bottom-8 right-8 w-16 h-16 bg-blue-600 text-white rounded-full shadow-2xl flex items-center justify-center hover:bg-blue-700 transition-all hover:scale-110 z-50 group"
+      >
+        {isChatOpen ? <X size={28} /> : <MessageSquare size={28} />}
+        {!isChatOpen && (
+          <span className="absolute -top-12 right-0 bg-slate-900 text-white text-[10px] font-bold px-3 py-1.5 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap shadow-xl">
+             ¿Necesitas ayuda? ✨
+          </span>
+        )}
+      </button>
+
+      {/* Chat Window */}
+      {isChatOpen && (
+        <div className="fixed bottom-28 right-8 w-[24rem] h-[34rem] bg-white rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.15)] flex flex-col overflow-hidden border border-slate-100 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                <BotIcon size={24} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm">EasyBot AI</h4>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Expert Tutor</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/50">
+            {chatMessages.length === 0 && (
+                <div className="text-center py-10">
+                    <p className="text-slate-400 text-sm px-8">👋 ¡Hola! Soy tu asistente experto en EasyDB. Puedo ayudarte a crear tablas, explicarte cómo usar la página o resolver tus dudas sobre bases de datos.</p>
+                </div>
+            )}
+            {chatMessages.map((msg, i) => (
+              <div key={i} className={cn(
+                "flex gap-3 max-w-[85%]",
+                msg.role === 'user' ? "ml-auto flex-row-reverse" : ""
+              )}>
+                <div className={cn(
+                  "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm",
+                  msg.role === 'user' ? "bg-slate-200 text-slate-600" : "bg-blue-600 text-white"
+                )}>
+                  {msg.role === 'user' ? <UserIcon size={14} /> : <BotIcon size={14} />}
+                </div>
+                <div className={cn(
+                  "px-4 py-3 rounded-2xl text-sm leading-relaxed",
+                  msg.role === 'user' ? "bg-white border border-slate-200 text-slate-800 rounded-tr-none" : "bg-blue-600 text-white rounded-tl-none shadow-md shadow-blue-100"
+                )}>
+                  {msg.text}
+                </div>
+              </div>
+            ))}
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="p-4 bg-white border-t border-slate-100">
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                const input = e.target.elements.chatInput;
+                handleChatMessage(input.value);
+                input.value = '';
+              }}
+              className="relative"
+            >
+              <input
+                name="chatInput"
+                type="text"
+                autoComplete="off"
+                placeholder="Escribe tu duda aquí..."
+                className="w-full pl-5 pr-12 py-4 bg-slate-100 border-none rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                disabled={isAiLoading}
+              />
+              <button 
+                type="submit"
+                disabled={isAiLoading}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow-lg shadow-blue-200 disabled:bg-slate-300"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
+
 
   );
 }

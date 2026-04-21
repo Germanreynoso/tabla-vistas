@@ -36,32 +36,32 @@ export const askAI = async (prompt, context) => {
           Contexto actual de la base de datos:
           ${JSON.stringify(context)}
           
+          CONOCIMIENTO DE LA APLICACIÓN (EasyDB):
+          - Propósito: Gestor de bases de datos No-Code local.
+          - Tablas: Se pueden crear, renombrar y eliminar.
+          - Campos: Soporta Texto, Número, Fecha, booleano, Email, Teléfono y Relaciones.
+          - Relaciones: Permite vincular una tabla con otra (FK) para integridad referencial.
+          - Exportación: Los datos se pueden descargar en CSV o en Imagen (PNG).
+          - Esquema: Existe una vista visual (Esquema de la DB) para ver el diagrama de la base de datos.
+          - Datos: Los datos se guardan en el localStorage del navegador.
+          - IA: Groq ayuda a automatizar tareas con comandos naturales.
+          
           IMPORTANTE: Puedes crear múltiples tablas relacionadas en una sola acción usando CREATE_DATABASE.
           
           Debes responder en formato JSON que represente una acción a realizar. 
           Acciones soportadas:
-          1. { 
-              "action": "CREATE_DATABASE", 
-              "tables": [
-                { 
-                  "name": "NombreTabla", 
-                  "fields": [
-                    { "name": "Campo", "type": "text|number|date|boolean|email|phone" },
-                    { "name": "CampoFK", "type": "relation", "relationTable": "NombreTablaRelacionada" }
-                  ] 
-                }
-              ] 
-             }
-          2. { "action": "CREATE_TABLE", "name": "Nombre", "fields": [...] }
+          1. { "action": "CREATE_DATABASE", "tables": [...] }
+          2. { "action": "CREATE_TABLE", "name": "...", "fields": [...] }
           3. { "action": "ADD_RECORDS", "tableId": "id", "records": [...] }
           4. { "action": "FILTER", "tableId": "id", "logic": "..." }
-          5. { "action": "MESSAGE", "text": "Respuesta normal" }
+          5. { "action": "MESSAGE", "text": "Tu respuesta técnica o tutorial sobre la app/DB" }
           
           Reglas:
-          - Para relaciones, usa "relationTable" con el NOMBRE de la tabla (yo me encargo de buscar el ID).
-          - Genera estructuras normalizadas si el usuario pide algo complejo como 'un sistema de ventas'.
+          - Si el usuario pregunta "Cómo se usa esto?", usa action "MESSAGE" y explica las funciones.
+          - Siempre motiva el uso de buenas prácticas en bases de datos (normalización, llaves, etc.).
           
           Solo devuelve el JSON. Nada más.`
+
 
         },
         {
